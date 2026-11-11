@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>우리의 추억 박물관</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+  <!-- 로비 -->
+  <div id="lobby" class="screen">
+    <div class="card">
+      <div class="heart-logo">♥</div>
+      <h1 id="lobby-title">우리의 추억 박물관</h1>
+      <p class="sub">방 코드를 공유하고 둘이 함께 추억을 걸어요</p>
+
+      <label class="field">
+        <span>내 이름</span>
+        <input id="name-input" maxlength="10" placeholder="예: 지하" />
+      </label>
+
+      <div class="color-pick">
+        <span>내 캐릭터 색</span>
+        <div id="colors"></div>
+      </div>
+
+      <button id="create-btn" class="btn primary">새 방 만들기</button>
+
+      <div class="divider"><span>또는</span></div>
+
+      <div class="join-row">
+        <input id="code-input" maxlength="5" placeholder="방 코드" autocomplete="off" />
+        <button id="join-btn" class="btn">참가</button>
+      </div>
+
+      <p id="lobby-msg" class="msg"></p>
+    </div>
+  </div>
+
+  <!-- 게임 HUD -->
+  <div id="hud" class="hidden">
+    <div id="room-box">
+      <div>방 코드 <b id="room-code">-----</b></div>
+      <button id="copy-link" class="mini">링크 복사</button>
+      <div id="partner-status" class="status wait">상대를 기다리는 중…</div>
+    </div>
+
+    <div id="hint" class="hidden"></div>
+    <div id="toast" class="hidden"></div>
+
+    <div id="buttons">
+      <button id="heart-btn" class="round" title="하트 (H)">♥</button>
+      <button id="view-btn" class="round hidden" title="크게 보기 (E)">🔍</button>
+    </div>
+
+    <div id="help">WASD / 방향키 이동 · 드래그로 시점 · E 크게 보기 · H 하트</div>
+
+    <div id="joystick"><div id="stick"></div></div>
+  </div>
+
+  <!-- 사진 크게 보기 -->
+  <div id="viewer" class="hidden">
+    <div class="viewer-inner">
+      <img id="viewer-img" alt="" />
+      <div class="viewer-text">
+        <h2 id="viewer-title"></h2>
+        <div id="viewer-date"></div>
+        <p id="viewer-caption"></p>
+      </div>
+      <div class="viewer-actions">
+        <button id="viewer-share" class="btn">상대에게도 보여주기</button>
+        <button id="viewer-close" class="btn primary">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="scene"></canvas>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
