@@ -444,10 +444,11 @@ const CHARACTERS = {
       prone: 1.25,     // 앞으로 엎드리는 각도
       spineUp: 0.25,   // 가슴 들기
       neckUp: 0.45,    // 목 들기
-      headUp: 0.35,    // 고개 들어 앞 보기
+      headUp: 0.6,     // 고개 들어 앞 보기
       armDown: 0.5,    // 앞지느러미 바닥 짚기
       armOut: 0.35,    // 앞지느러미 옆으로 벌리기
-      tailBack: 0.2,   // 뒷지느러미 뒤로 뻗기
+      // 뒷지느러미를 뒤로 나란히 뻗기 (Tripo 뼈대가 좌우 비대칭이라 따로 맞춤)
+      legLx: 1.4, legLy: -0.5, legRx: 1.35,
       speed: 1.0,      // 걷기 속도 배율
       hump: 0.32,      // 등이 물결치는 크기
       bounce: 0.07,    // 통 튀어 오르는 높이
@@ -649,8 +650,10 @@ class SealRig {
       this.rot(side + '_Clavicle', 'x', P.armDown * 0.4);
       this.rot(side + '_Upperarm', 'x', P.armDown);
       this.rot(side + '_Upperarm', 'z', sign * P.armOut);
-      this.rot(side + '_Thigh', 'x', -P.tailBack);
     }
+    this.rot('L_Thigh', 'x', P.legLx || 0);
+    this.rot('L_Thigh', 'y', P.legLy || 0);
+    this.rot('R_Thigh', 'x', P.legRx || 0);
 
     // ---- 걷기: 갤럼핑 (가슴 튀어오름 → 등 물결 → 뒷지느러미 들썩) ----
     const hop = Math.max(0, s);                 // 가슴이 들리는 순간
