@@ -28,6 +28,12 @@
 - 사진은 한 장당 2MB 이하(긴 변 2000px 정도)로 줄여서 올리면 빨리 열려요.
 - ⚠️ 공개(public) 저장소라면 사진도 누구나 볼 수 있어요.
 
+## 캐릭터 모델
+- `models/wajiha.glb` — Wajiha (Tripo로 제작)
+- `models/rae.glb` — Rae. 파일이 없으면 Wajiha 모델을 조금 크고 푸르스름하게 바꿔 임시로 씁니다.
+- 리깅이 없어도 괜찮아요. 뒤뚱 걸음·숨쉬기 동작은 코드로 만듭니다.
+- 텍스처는 2000년대 게임 느낌이 나도록 256px로 줄여서 씁니다.
+
 ## 배포 (GitHub Pages)
 저장소 **Settings → Pages → Branch: `main` / `(root)` → Save**  
 잠시 뒤 `https://<아이디>.github.io/jiha.rae/` 주소로 접속할 수 있습니다.

@@ -8,7 +8,8 @@
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
       }
     }
   </script>
@@ -27,9 +28,16 @@
         <input id="name-input" maxlength="10" placeholder="예: 지하" />
       </label>
 
-      <div class="color-pick">
-        <span>내 캐릭터 색</span>
-        <div id="colors"></div>
+      <div class="char-pick">
+        <span>내 캐릭터</span>
+        <div class="char-row">
+          <button type="button" class="char-card" data-char="wajiha">
+            <span class="seal">🦭</span><b>Wajiha</b><small>리본 물범</small>
+          </button>
+          <button type="button" class="char-card" data-char="rae">
+            <span class="seal">🦭</span><b>Rae</b><small>나비넥타이 물범</small>
+          </button>
+        </div>
       </div>
 
       <button id="create-btn" class="btn primary">새 방 만들기</button>

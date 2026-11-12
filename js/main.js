@@ -1,13 +1,13 @@
 // 우리의 추억 박물관 — 2인 3D 웹 게임
 // Three.js(렌더링) + PeerJS(방 코드로 둘이 연결)
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /* =========================================================
    설정
    ========================================================= */
 const PEER_PREFIX = 'jiharae-museum-v1-';          // 방 코드 앞에 붙는 고유 접두사
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // 헷갈리는 글자(0,O,1,I,L) 제외
-const COLORS = ['#e05a7a', '#5a8de0', '#f0a83c', '#4cb38a', '#9b6be0'];
 const HALL_W = 14;            // 전시관 폭
 const WALL_H = 5;             // 벽 높이
 const FRAME_SPACING = 5;      // 액자 간격
@@ -26,19 +26,15 @@ const store = {
 };
 
 let myName = store.get('museum-name', '');
-let myColor = store.get('museum-color', COLORS[0]);
+let myChar = store.get('museum-char', 'wajiha');
 $('name-input').value = myName;
 
-COLORS.forEach((c) => {
-  const s = document.createElement('div');
-  s.className = 'swatch' + (c === myColor ? ' on' : '');
-  s.style.background = c;
-  s.onclick = () => {
-    myColor = c;
-    document.querySelectorAll('.swatch').forEach((el) => el.classList.remove('on'));
-    s.classList.add('on');
+document.querySelectorAll('.char-card').forEach((card) => {
+  card.classList.toggle('on', card.dataset.char === myChar);
+  card.onclick = () => {
+    myChar = card.dataset.char;
+    document.querySelectorAll('.char-card').forEach((el) => el.classList.toggle('on', el === card));
   };
-  $('colors').appendChild(s);
 });
 
 const params = new URLSearchParams(location.search);
@@ -58,7 +54,7 @@ function readName() {
   if (!n) { lobbyMsg('이름을 먼저 적어주세요.'); $('name-input').focus(); return null; }
   myName = n;
   store.set('museum-name', n);
-  store.set('museum-color', myColor);
+  store.set('museum-char', myChar);
   return n;
 }
 
@@ -436,80 +432,142 @@ const heartTex = canvasTexture(128, 128, (g, w, h) => {
   g.fillText('♥', w / 2, h / 2 + 6);
 });
 
+/* ---------- 캐릭터 모델 (models/*.glb) ---------- */
+const CHARACTERS = {
+  wajiha: { label: 'Wajiha', file: 'models/wajiha.glb', height: 1.2, tint: null, fallbackColor: '#e05a7a' },
+  // rae.glb가 아직 없으면 wajiha 모델을 조금 크고 푸르스름하게 바꿔서 임시로 씁니다.
+  rae: { label: 'Rae', file: 'models/rae.glb', fallbackFile: 'models/wajiha.glb', height: 1.3, tint: 0xa9bccf, fallbackColor: '#5a8de0' },
+};
+const modelCache = {};
+const gltfLoader = new GLTFLoader();
+
+function loadGLB(url) {
+  return new Promise((resolve) => gltfLoader.load(url, (g) => resolve(g.scene), undefined, () => resolve(null)));
+}
+
+// 2000년대 게임 느낌: 텍스처를 256px로 줄이고 밉맵 없이 사용
+function retroTexture(tex) {
+  const img = tex && tex.image;
+  if (!img || !img.width) return tex;
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  c.getContext('2d').drawImage(img, 0, 0, size, size);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.flipY = tex.flipY;
+  t.wrapS = tex.wrapS; t.wrapT = tex.wrapT;
+  t.generateMipmaps = false;
+  t.minFilter = THREE.LinearFilter;
+  return t;
+}
+
+async function preloadCharacters() {
+  for (const [id, def] of Object.entries(CHARACTERS)) {
+    let model = await loadGLB(def.file);
+    let tint = null;
+    if (!model && def.fallbackFile) { model = await loadGLB(def.fallbackFile); tint = def.tint; }
+    if (!model) continue;
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      const m = o.material.clone();
+      if (m.map) m.map = retroTexture(m.map);
+      if (tint) m.color.setHex(tint);
+      m.side = THREE.FrontSide;
+      o.material = m;
+    });
+    // 크기 맞추기: 발이 y=0, 키가 def.height가 되도록
+    const box = new THREE.Box3().setFromObject(model);
+    const s = def.height / (box.max.y - box.min.y);
+    model.scale.setScalar(s);
+    model.position.y = -box.min.y * s;
+    const wrap = new THREE.Group();
+    wrap.add(model);
+    modelCache[id] = wrap;
+  }
+}
+
 class Character {
-  constructor(name, color) {
+  constructor(name, charId) {
     this.group = new THREE.Group();
     this.body = new THREE.Group();
     this.group.add(this.body);
-
-    const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
-    this.bodyMat = bodyMat;
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0xffe0cc, roughness: 0.7 });
-    const darkMat = new THREE.MeshBasicMaterial({ color: 0x2b1d22 });
-    const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff9db1 });
-
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.5, 6, 16), bodyMat);
-    torso.position.y = 0.62;
-    this.body.add(torso);
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 24, 18), skinMat);
-    head.position.y = 1.32;
-    this.body.add(head);
-
-    for (const x of [-0.1, 0.1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), darkMat);
-      eye.position.set(x, 1.36, 0.27);
-      this.body.add(eye);
-      const cheek = new THREE.Mesh(new THREE.CircleGeometry(0.045, 12), cheekMat);
-      cheek.position.set(x * 1.7, 1.27, 0.262);
-      cheek.rotation.y = x * 1.5;
-      this.body.add(cheek);
-    }
-    // 머리 위 작은 방울(모자 느낌)
-    const pom = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), bodyMat);
-    pom.position.y = 1.66;
-    this.body.add(pom);
+    this.charId = CHARACTERS[charId] ? charId : 'wajiha';
+    this.buildBody();
 
     this.label = labelSprite(name);
-    this.label.position.y = 2.0;
     this.group.add(this.label);
+    this.placeLabel();
 
     this.walkTime = 0;
+    this.idleTime = Math.random() * 10;
     this.moving = false;
     this.hearts = [];
     scene.add(this.group);
   }
 
+  buildBody() {
+    this.body.clear();
+    const def = CHARACTERS[this.charId];
+    if (modelCache[this.charId]) {
+      this.body.add(modelCache[this.charId].clone());
+      this.height = def.height;
+      return;
+    }
+    // 모델을 못 불러오면 간단한 도형 캐릭터
+    const bodyMat = new THREE.MeshStandardMaterial({ color: def.fallbackColor, roughness: 0.6 });
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.5, 6, 16), bodyMat);
+    torso.position.y = 0.62;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 24, 18), new THREE.MeshStandardMaterial({ color: 0xd9d2c8 }));
+    head.position.y = 1.32;
+    this.body.add(torso, head);
+    this.height = 1.62;
+  }
+
+  placeLabel() { this.label.position.y = this.height + 0.35; }
+
   setName(name) {
     this.group.remove(this.label);
     this.label = labelSprite(name);
-    this.label.position.y = 2.0;
     this.group.add(this.label);
+    this.placeLabel();
   }
 
-  setColor(color) {
-    this.bodyMat.color.set(color);
+  setCharacter(charId) {
+    if (!CHARACTERS[charId] || charId === this.charId) return;
+    this.charId = charId;
+    this.buildBody();
+    this.placeLabel();
   }
 
   heart() {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: heartTex, transparent: true, depthTest: false }));
     s.scale.set(0.5, 0.5, 1);
-    s.position.set((Math.random() - 0.5) * 0.3, 2.3, 0);
+    s.position.set((Math.random() - 0.5) * 0.3, this.height + 0.6, 0);
+    s.userData.y0 = this.height + 0.6;
     s.renderOrder = 11;
     this.group.add(s);
     this.hearts.push({ s, life: 0 });
   }
 
   update(dt) {
-    if (this.moving) this.walkTime += dt * 9;
+    // 물범 뒤뚱 걸음: 좌우로 기우뚱 + 콩콩 + 살짝 앞으로 숙이기
+    if (this.moving) this.walkTime += dt * 10;
     else this.walkTime *= 0.85;
-    this.body.position.y = Math.abs(Math.sin(this.walkTime)) * 0.08;
-    this.body.rotation.z = Math.sin(this.walkTime) * 0.06;
+    const w = Math.sin(this.walkTime);
+    const lean = this.moving ? 0.12 : 0;
+    this.body.rotation.z = w * 0.16;
+    this.body.position.y = Math.abs(w) * 0.07;
+    this.body.rotation.x += (lean - this.body.rotation.x) * Math.min(1, dt * 8);
+    // 가만히 있을 때 숨쉬기
+    this.idleTime += dt;
+    const breath = this.moving ? 1 : 1 + Math.sin(this.idleTime * 2.2) * 0.015;
+    this.body.scale.set(1 / Math.sqrt(breath), breath, 1 / Math.sqrt(breath));
 
     for (let i = this.hearts.length - 1; i >= 0; i--) {
       const h = this.hearts[i];
       h.life += dt;
-      h.s.position.y = 2.3 + h.life * 0.9;
+      h.s.position.y = h.s.userData.y0 + h.life * 0.9;
       h.s.material.opacity = Math.max(0, 1 - h.life / 1.6);
       const sc = 0.5 + Math.sin(Math.min(h.life * 6, Math.PI / 2)) * 0.2;
       h.s.scale.set(sc, sc, 1);
@@ -676,7 +734,7 @@ function setStatus(online) {
 function setupConnection(c) {
   conn = c;
   c.on('open', () => {
-    send({ t: 'hello', name: myName, color: myColor });
+    send({ t: 'hello', name: myName, char: myChar });
   });
   c.on('data', (msg) => handleMessage(msg));
   c.on('close', () => {
@@ -694,9 +752,9 @@ function handleMessage(msg) {
   switch (msg.t) {
     case 'hello': {
       partnerName = String(msg.name || '상대').slice(0, 10);
-      const color = COLORS.includes(msg.color) ? msg.color : COLORS[1];
+      const charId = msg.char === 'rae' ? 'rae' : 'wajiha';
       if (!partner) {
-        partner = new Character(partnerName, color);
+        partner = new Character(partnerName, charId);
         partner.group.position.set(1, 0, HALL_L / 2 - 3);
         partnerTarget.x = 1;
         partnerTarget.z = HALL_L / 2 - 3;
@@ -704,7 +762,7 @@ function handleMessage(msg) {
         showToast(`${partnerName}님과 연결됐어요 ♥`);
       } else {
         partner.setName(partnerName);
-        partner.setColor(color);
+        partner.setCharacter(charId);
       }
       setStatus(true);
       break;
@@ -831,9 +889,9 @@ async function startGame() {
   if (started) return;
   started = true;
   await galleryReady;
-  await buildMuseum();
+  await Promise.all([buildMuseum(), preloadCharacters()]);
 
-  me = new Character(myName, myColor);
+  me = new Character(myName, myChar);
   me.group.position.set(-1, 0, HALL_L / 2 - 3);
   me.group.rotation.y = Math.PI; // 안쪽(-z) 바라보기
 
@@ -841,7 +899,7 @@ async function startGame() {
   $('lobby').classList.add('hidden');
   $('hud').classList.remove('hidden');
   history.replaceState(null, '', `${location.pathname}?room=${roomCode}`);
-  if (conn && conn.open) send({ t: 'hello', name: myName, color: myColor });
+  if (conn && conn.open) send({ t: 'hello', name: myName, char: myChar });
   setStatus(!!partner);
   requestAnimationFrame(loop);
 }
@@ -951,7 +1009,7 @@ function loop() {
 
   // --- 카메라 (3인칭) ---
   const target = tmpV.copy(me.group.position);
-  target.y += 1.3;
+  target.y += me.height * 0.8;
   const cx = target.x + Math.sin(camYaw) * Math.cos(camPitch) * camDist;
   const cz = target.z + Math.cos(camYaw) * Math.cos(camPitch) * camDist;
   const cy = target.y + Math.sin(camPitch) * camDist;

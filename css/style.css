@@ -30,7 +30,7 @@ body {
 .sub { font-size: 14px; color: #8a6a74; margin-bottom: 22px; }
 
 .field { display: block; text-align: left; margin-bottom: 14px; }
-.field span, .color-pick > span { display: block; font-size: 13px; color: #8a6a74; margin-bottom: 6px; }
+.field span, .char-pick > span { display: block; font-size: 13px; color: #8a6a74; margin-bottom: 6px; }
 input {
   width: 100%; padding: 12px 14px; font-size: 16px;
   border: 1.5px solid #ecd2d9; border-radius: 12px; background: #fff;
@@ -38,13 +38,17 @@ input {
 }
 input:focus { border-color: #e05a7a; }
 
-.color-pick { text-align: left; margin-bottom: 20px; }
-#colors { display: flex; gap: 10px; }
-.swatch {
-  width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
-  border: 3px solid transparent; box-shadow: 0 2px 6px rgba(0,0,0,.15);
+.char-pick { text-align: left; margin-bottom: 20px; }
+.char-row { display: flex; gap: 10px; }
+.char-card {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 12px 8px; border-radius: 14px; cursor: pointer; font-family: inherit;
+  background: #fff; border: 2px solid #ecd2d9; color: #3b2a30;
 }
-.swatch.on { border-color: #3b2a30; }
+.char-card .seal { font-size: 30px; }
+.char-card b { font-size: 15px; }
+.char-card small { font-size: 11px; color: #a07d88; }
+.char-card.on { border-color: #e05a7a; background: #fff0f3; }
 
 .btn {
   padding: 12px 18px; font-size: 15px; font-weight: 600; font-family: inherit;
