@@ -476,6 +476,13 @@ async function preloadCharacters() {
       m.side = THREE.FrontSide;
       o.material = m;
     });
+    // 걷기 변형에 쓸 원본 크기(모델 자체 좌표)
+    const raw = new THREE.Box3();
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.geometry.computeBoundingBox();
+      raw.union(o.geometry.boundingBox);
+    });
     // 크기 맞추기: 발이 y=0, 키가 def.height가 되도록
     const box = new THREE.Box3().setFromObject(model);
     const s = def.height / (box.max.y - box.min.y);
@@ -483,8 +490,69 @@ async function preloadCharacters() {
     model.position.y = -box.min.y * s;
     const wrap = new THREE.Group();
     wrap.add(model);
+    wrap.userData.raw = {
+      minY: raw.min.y,
+      h: raw.max.y - raw.min.y,
+      hw: Math.max(Math.abs(raw.min.x), Math.abs(raw.max.x)),
+    };
     modelCache[id] = wrap;
   }
+}
+
+/* ---------- 걷기 애니메이션 (리깅 없이 버텍스 셰이더로 부위별 변형) ----------
+   모델 좌표 기준: y=높이, x=좌우(+x가 오른쪽), +z가 앞
+   - 아래쪽(꼬리지느러미): 좌우 번갈아 들어 올려 내딛기
+   - 옆으로 튀어나온 중간 높이(앞지느러미): 어깨를 축으로 앞뒤 스윙 + 퍼덕임
+   - 몸통: 위로 갈수록 좌우로 휘청, 머리는 반대로 버팀, 앞으로 살짝 숙임
+   - 발 디딜 때 살짝 눌렸다 펴짐 */
+const WALK_VERTEX = `
+{
+  float h = clamp((transformed.y - uMinY) / uH, 0.0, 1.0);
+  float ws = sin(uPhase);
+  float wc = cos(uPhase);
+  float side = transformed.x >= 0.0 ? 1.0 : -1.0;
+  float ax = abs(transformed.x) / uHW;
+
+  // 꼬리지느러미 번갈아 들기
+  float footW = 1.0 - smoothstep(0.0, 0.18, h);
+  float lift = max(0.0, ws * side);
+  transformed.y += footW * lift * 0.07 * uH * uAmt;
+  transformed.z += footW * ws * side * 0.06 * uH * uAmt;
+
+  // 앞지느러미 스윙/퍼덕임
+  float flipW = smoothstep(0.5, 0.78, ax) * smoothstep(0.22, 0.38, h) * (1.0 - smoothstep(0.72, 0.86, h));
+  vec2 pivot = vec2(side * 0.48 * uHW, uMinY + 0.64 * uH);
+  float flap = (0.12 + 0.18 * abs(ws)) * uAmt + (0.04 + 0.06 * max(0.0, sin(uIdle * 1.9))) * (1.0 - uAmt);
+  float a = flap * side * flipW;
+  vec2 p = transformed.xy - pivot;
+  p = vec2(p.x * cos(a) - p.y * sin(a), p.x * sin(a) + p.y * cos(a));
+  transformed.xy = pivot + p;
+  float b = (-ws * side * 0.55 * uAmt + sin(uIdle * 1.3 + side) * 0.06 * (1.0 - uAmt)) * flipW;
+  float dy = transformed.y - pivot.y;
+  float dz = transformed.z;
+  transformed.y = pivot.y + dy * cos(b) + dz * sin(b);
+  transformed.z = dz * cos(b) - dy * sin(b);
+
+  // 몸통 휘청 + 머리는 덜 흔들리게 + 앞으로 숙이기
+  float bend = h * h * (1.0 - 0.55 * smoothstep(0.72, 1.0, h));
+  transformed.x += ws * 0.09 * uH * bend * uAmt;
+  transformed.z += 0.07 * uH * h * h * uAmt;
+
+  // 발 디딜 때 눌림
+  float squash = 1.0 - 0.06 * abs(wc) * uAmt;
+  transformed.y = uMinY + (transformed.y - uMinY) * squash;
+  transformed.xz *= 1.0 + (1.0 - squash) * 0.5;
+}
+`;
+
+function applyWalkShader(material, uniforms) {
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader =
+      'uniform float uPhase;\nuniform float uAmt;\nuniform float uIdle;\nuniform float uH;\nuniform float uHW;\nuniform float uMinY;\n' +
+      shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n' + WALK_VERTEX);
+  };
+  material.customProgramCacheKey = () => 'seal-walk-v1';
 }
 
 class Character {
@@ -500,6 +568,7 @@ class Character {
     this.placeLabel();
 
     this.walkTime = 0;
+    this.walkAmt = 0;
     this.idleTime = Math.random() * 10;
     this.moving = false;
     this.hearts = [];
@@ -510,10 +579,24 @@ class Character {
     this.body.clear();
     const def = CHARACTERS[this.charId];
     if (modelCache[this.charId]) {
-      this.body.add(modelCache[this.charId].clone());
+      const cached = modelCache[this.charId];
+      const raw = cached.userData.raw;
+      const model = cached.clone();
+      this.uniforms = {
+        uPhase: { value: 0 }, uAmt: { value: 0 }, uIdle: { value: 0 },
+        uH: { value: raw.h }, uHW: { value: raw.hw }, uMinY: { value: raw.minY },
+      };
+      model.traverse((o) => {
+        if (!o.isMesh) return;
+        o.material = o.material.clone();
+        applyWalkShader(o.material, this.uniforms);
+        o.frustumCulled = false; // 변형된 모양이 화면 가장자리에서 사라지지 않게
+      });
+      this.body.add(model);
       this.height = def.height;
       return;
     }
+    this.uniforms = null;
     // 모델을 못 불러오면 간단한 도형 캐릭터
     const bodyMat = new THREE.MeshStandardMaterial({ color: def.fallbackColor, roughness: 0.6 });
     const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.5, 6, 16), bodyMat);
@@ -551,18 +634,27 @@ class Character {
   }
 
   update(dt) {
-    // 물범 뒤뚱 걸음: 좌우로 기우뚱 + 콩콩 + 살짝 앞으로 숙이기
-    if (this.moving) this.walkTime += dt * 10;
-    else this.walkTime *= 0.85;
-    const w = Math.sin(this.walkTime);
-    const lean = this.moving ? 0.12 : 0;
-    this.body.rotation.z = w * 0.16;
-    this.body.position.y = Math.abs(w) * 0.07;
-    this.body.rotation.x += (lean - this.body.rotation.x) * Math.min(1, dt * 8);
-    // 가만히 있을 때 숨쉬기
+    // 걷기 정도(0~1)를 부드럽게 올리고 내려서 출발/멈춤이 자연스럽게
+    const target = this.moving ? 1 : 0;
+    this.walkAmt += (target - this.walkAmt) * Math.min(1, dt * (this.moving ? 7 : 5));
+    if (this.walkAmt > 0.01) this.walkTime += dt * 9.5;
     this.idleTime += dt;
-    const breath = this.moving ? 1 : 1 + Math.sin(this.idleTime * 2.2) * 0.015;
+    const amt = this.walkAmt;
+    const w = Math.sin(this.walkTime);
+
+    // 몸 전체: 작은 좌우 뒤뚱 + 걸음마다 콩
+    this.body.rotation.z = w * 0.07 * amt;
+    this.body.position.y = Math.abs(w) * 0.035 * amt;
+    this.body.rotation.x = 0;
+    // 가만히 있을 때 숨쉬기
+    const breath = 1 + Math.sin(this.idleTime * 2.2) * 0.015 * (1 - amt);
     this.body.scale.set(1 / Math.sqrt(breath), breath, 1 / Math.sqrt(breath));
+
+    if (this.uniforms) {
+      this.uniforms.uPhase.value = this.walkTime;
+      this.uniforms.uAmt.value = amt;
+      this.uniforms.uIdle.value = this.idleTime;
+    }
 
     for (let i = this.hearts.length - 1; i >= 0; i--) {
       const h = this.hearts[i];
