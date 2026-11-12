@@ -717,6 +717,7 @@ $('toast').onclick = () => {
 let peer = null;
 let conn = null;
 let roomCode = '';
+let isHost = false;
 let partner = null;
 let partnerName = '상대';
 const partnerTarget = { x: 0, z: 0, ry: 0, moving: false };
@@ -755,8 +756,9 @@ function handleMessage(msg) {
       const charId = msg.char === 'rae' ? 'rae' : 'wajiha';
       if (!partner) {
         partner = new Character(partnerName, charId);
-        partner.group.position.set(1, 0, HALL_L / 2 - 3);
-        partnerTarget.x = 1;
+        const px = isHost ? 1 : -1;
+        partner.group.position.set(px, 0, HALL_L / 2 - 3);
+        partnerTarget.x = px;
         partnerTarget.z = HALL_L / 2 - 3;
         partnerTarget.ry = Math.PI;
         showToast(`${partnerName}님과 연결됐어요 ♥`);
@@ -795,6 +797,7 @@ function sendHeart() {
 }
 
 function createRoom(tries = 0) {
+  isHost = true;
   roomCode = makeCode();
   peer = new Peer(PEER_PREFIX + roomCode);
   lobbyMsg('방을 만드는 중…', true);
@@ -892,7 +895,9 @@ async function startGame() {
   await Promise.all([buildMuseum(), preloadCharacters()]);
 
   me = new Character(myName, myChar);
-  me.group.position.set(-1, 0, HALL_L / 2 - 3);
+  me.group.position.set(isHost ? -1 : 1, 0, HALL_L / 2 - 3);
+  // 모델이 준비되기 전에 들어온 상대 캐릭터도 다시 그리기
+  if (partner) { partner.buildBody(); partner.placeLabel(); }
   me.group.rotation.y = Math.PI; // 안쪽(-z) 바라보기
 
   $('room-code').textContent = roomCode;
