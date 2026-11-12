@@ -30,7 +30,7 @@
 
 ## 캐릭터 모델
 - `models/wajiha.glb` — Wajiha (Tripo로 제작)
-- `models/rae.glb` — Rae. 파일이 없으면 Wajiha 모델을 조금 크고 푸르스름하게 바꿔 임시로 씁니다.
+- `models/rae.glb` — Rae (Tripo로 제작)
 - 리깅이 없어도 괜찮아요. 뒤뚱 걸음·숨쉬기 동작은 코드로 만듭니다.
 - 텍스처는 2000년대 게임 느낌이 나도록 256px로 줄여서 씁니다.
 
