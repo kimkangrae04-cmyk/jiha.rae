@@ -2,6 +2,7 @@
 // Three.js(렌더링) + PeerJS(방 코드로 둘이 연결)
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 /* =========================================================
    설정
@@ -436,9 +437,36 @@ const heartTex = canvasTexture(128, 128, (g, w, h) => {
 const CHARACTERS = {
   wajiha: { label: 'Wajiha', file: 'models/wajiha.glb', height: 1.2, tint: null, fallbackColor: '#e05a7a' },
   // rae.glb가 아직 없으면 wajiha 모델을 조금 크고 푸르스름하게 바꿔서 임시로 씁니다.
-  rae: { label: 'Rae', file: 'models/rae.glb', fallbackFile: 'models/wajiha.glb', height: 1.3, tint: 0xa9bccf, fallbackColor: '#5a8de0' },
+  rae: {
+    label: 'Rae', file: 'models/rae.glb', fallbackFile: 'models/wajiha.glb', height: 1.3, tint: 0xa9bccf, fallbackColor: '#5a8de0',
+    // 리깅된 모델용 동작 숫자 (라디안 / 모델 키=1 기준 길이)
+    rig: {
+      prone: 1.25,     // 앞으로 엎드리는 각도
+      spineUp: 0.25,   // 가슴 들기
+      neckUp: 0.45,    // 목 들기
+      headUp: 0.35,    // 고개 들어 앞 보기
+      armDown: 0.5,    // 앞지느러미 바닥 짚기
+      armOut: 0.35,    // 앞지느러미 옆으로 벌리기
+      tailBack: 0.2,   // 뒷지느러미 뒤로 뻗기
+      speed: 1.0,      // 걷기 속도 배율
+      hump: 0.32,      // 등이 물결치는 크기
+      bounce: 0.07,    // 통 튀어 오르는 높이
+      armSwing: 0.6,   // 앞지느러미 젓기
+      tailKick: 0.45,  // 뒷지느러미 들썩임
+      roll: 0.12,      // 좌우 출렁
+      headBob: 0.18,   // 고개 까딱
+      breathe: 0.03,   // 숨쉬기
+      idleTilt: 0.18,  // 쉴 때 고개 갸웃
+    },
+  },
 };
 const modelCache = {};
+window.__museum = {
+  CHARACTERS,
+  get me() { return me; },
+  get partner() { return partner; },
+  rebuild() { for (const c of [me, partner]) if (c) { c.buildBody(); c.placeLabel(); } },
+}; // 동작 숫자 실시간 조정용
 const gltfLoader = new GLTFLoader();
 
 function loadGLB(url) {
@@ -490,6 +518,10 @@ async function preloadCharacters() {
     model.position.y = -box.min.y * s;
     const wrap = new THREE.Group();
     wrap.add(model);
+    let skinned = false;
+    model.traverse((o) => { if (o.isSkinnedMesh) skinned = true; });
+    wrap.userData.skinned = skinned;
+    wrap.userData.scale = s;
     wrap.userData.raw = {
       minY: raw.min.y,
       h: raw.max.y - raw.min.y,
@@ -545,6 +577,117 @@ const WALK_VERTEX = `
 }
 `;
 
+/* ---------- 뼈 애니메이션 (Tripo 리깅 모델) ----------
+   Tripo의 사람형 뼈대를 물범처럼 씁니다.
+   - 척추(Waist·Spine01·Spine02): 애벌레처럼 물결
+   - 팔(Clavicle·Upperarm): 앞지느러미, 다리(Thigh): 뒷지느러미
+   각 뼈를 '모델 기준 축'(x=좌우축, y=위, z=앞)으로 돌려서 뼈마다 다른 로컬 축을 신경 쓰지 않게 했습니다. */
+const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+
+class SealRig {
+  constructor(root, params) {
+    this.p = params;
+    this.q = new THREE.Quaternion();
+    this.bones = {};
+    this.meshes = [];
+    root.updateMatrixWorld(true);
+    const rootInv = root.getWorldQuaternion(new THREE.Quaternion()).invert();
+    root.traverse((o) => {
+      if (o.isSkinnedMesh) this.meshes.push(o);
+      if (!o.isBone) return;
+      const inv = o.getWorldQuaternion(new THREE.Quaternion()).premultiply(rootInv).invert();
+      this.bones[o.name] = {
+        bone: o,
+        rest: o.quaternion.clone(),
+        restPos: o.position.clone(),
+        axes: { x: AXES.x.clone().applyQuaternion(inv), y: AXES.y.clone().applyQuaternion(inv), z: AXES.z.clone().applyQuaternion(inv) },
+      };
+    });
+    this.root = this.bones.BoneRoot;
+    this.ground = new THREE.Vector3();
+    this.settle(root);
+  }
+
+  rot(name, axis, angle) {
+    const b = this.bones[name];
+    if (!b || !angle) return;
+    b.bone.quaternion.multiply(this.q.setFromAxisAngle(b.axes[axis], angle));
+  }
+
+  // 기본 자세를 잡고, 발(배)이 바닥에 닿고 몸 가운데가 원점에 오도록 위치 보정
+  settle(root) {
+    this.ground.set(0, 0, 0);
+    this.pose(0, 0, 0);
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    for (const m of this.meshes) { m.computeBoundingBox(); box.union(m.boundingBox); }
+    if (!box.isEmpty()) {
+      this.ground.set(0, -box.min.y, -(box.min.z + box.max.z) / 2);
+      this.restHeight = box.max.y - box.min.y;
+    }
+    this.pose(0, 0, 0);
+  }
+
+  pose(amt, phase, idle) {
+    const P = this.p;
+    for (const k in this.bones) {
+      const b = this.bones[k];
+      b.bone.quaternion.copy(b.rest);
+      b.bone.position.copy(b.restPos);
+    }
+    const s = Math.sin(phase);
+    const c = Math.cos(phase);
+    const still = 1 - amt;
+
+    // ---- 기본 자세: 배를 바닥에 대고 엎드려 고개 들기 ----
+    this.rot('Hip', 'x', P.prone);
+    this.rot('Spine01', 'x', -P.spineUp * 0.5);
+    this.rot('Spine02', 'x', -P.spineUp * 0.5);
+    this.rot('NeckTwist01', 'x', -P.neckUp);
+    this.rot('Head', 'x', -P.headUp);
+    for (const [side, sign] of [['L', 1], ['R', -1]]) {
+      this.rot(side + '_Clavicle', 'x', P.armDown * 0.4);
+      this.rot(side + '_Upperarm', 'x', P.armDown);
+      this.rot(side + '_Upperarm', 'z', sign * P.armOut);
+      this.rot(side + '_Thigh', 'x', -P.tailBack);
+    }
+
+    // ---- 걷기: 갤럼핑 (가슴 튀어오름 → 등 물결 → 뒷지느러미 들썩) ----
+    const hop = Math.max(0, s);                 // 가슴이 들리는 순간
+    const wave = Math.sin(phase - 1.1);         // 등 물결 (가슴보다 늦게)
+    this.rot('Hip', 'x', -hop * P.hump * 0.5 * amt);
+    this.rot('Waist', 'x', -wave * P.hump * amt);
+    this.rot('Spine01', 'x', wave * P.hump * 0.6 * amt);
+    this.rot('Spine02', 'x', hop * P.hump * 0.5 * amt);
+    this.rot('NeckTwist01', 'x', -hop * P.headBob * amt);
+    this.rot('Head', 'x', hop * P.headBob * 0.6 * amt);
+    this.rot('Hip', 'y', s * P.roll * amt);
+    for (const [side, sign] of [['L', 1], ['R', -1]]) {
+      this.rot(side + '_Upperarm', 'x', -c * P.armSwing * amt);           // 둘이 같이 바닥 밀기
+      this.rot(side + '_Upperarm', 'z', sign * hop * P.armSwing * 0.3 * amt);
+      this.rot(side + '_Thigh', 'x', -Math.max(0, -s) * P.tailKick * amt); // 뒷지느러미 들썩
+      this.rot(side + '_Calf', 'x', -Math.max(0, -s) * P.tailKick * 0.6 * amt);
+    }
+
+    // ---- 쉬기: 숨쉬기, 고개 갸웃, 가끔 꼬리 꼼지락 ----
+    const br = Math.sin(idle * 2.0);
+    this.rot('Spine02', 'x', br * P.breathe * still);
+    this.rot('NeckTwist01', 'x', -br * P.breathe * 0.5 * still);
+    this.rot('Head', 'z', Math.sin(idle * 0.7) * P.idleTilt * still);
+    this.rot('Head', 'x', Math.max(0, Math.sin(idle * 0.45)) * 0.12 * still);
+    const wig = Math.max(0, Math.sin(idle * 0.9) - 0.6) * 2.5;
+    for (const side of ['L', 'R']) {
+      this.rot(side + '_Thigh', 'x', -Math.sin(idle * 9) * wig * 0.25 * still);
+    }
+
+    // ---- 위치: 바닥 맞춤 + 튀어오르기 ----
+    if (this.root) {
+      this.root.bone.position.add(this.ground);
+      this.root.bone.position.y += (hop * P.bounce + Math.max(0, br) * 0.004 * still) * (amt > 0 ? 1 : 1);
+    }
+  }
+}
+
 function applyWalkShader(material, uniforms) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -581,6 +724,20 @@ class Character {
     if (modelCache[this.charId]) {
       const cached = modelCache[this.charId];
       const raw = cached.userData.raw;
+      if (cached.userData.skinned) {
+        const model = SkeletonUtils.clone(cached);
+        model.traverse((o) => {
+          if (!o.isMesh) return;
+          o.material = o.material.clone();
+          o.frustumCulled = false;
+        });
+        this.body.add(model);
+        this.uniforms = null;
+        this.rig = new SealRig(model, def.rig || {});
+        this.height = this.rig.restHeight ? this.rig.restHeight * cached.userData.scale : def.height;
+        return;
+      }
+      this.rig = null;
       const model = cached.clone();
       this.uniforms = {
         uPhase: { value: 0 }, uAmt: { value: 0 }, uIdle: { value: 0 },
@@ -597,6 +754,7 @@ class Character {
       return;
     }
     this.uniforms = null;
+    this.rig = null;
     // 모델을 못 불러오면 간단한 도형 캐릭터
     const bodyMat = new THREE.MeshStandardMaterial({ color: def.fallbackColor, roughness: 0.6 });
     const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.5, 6, 16), bodyMat);
@@ -637,11 +795,19 @@ class Character {
     // 걷기 정도(0~1)를 부드럽게 올리고 내려서 출발/멈춤이 자연스럽게
     const target = this.moving ? 1 : 0;
     this.walkAmt += (target - this.walkAmt) * Math.min(1, dt * (this.moving ? 7 : 5));
-    if (this.walkAmt > 0.01) this.walkTime += dt * 9.5;
+    const spd = this.rig ? (this.rig.p.speed || 1) : 1;
+    if (this.walkAmt > 0.01) this.walkTime += dt * 9.5 * spd;
     this.idleTime += dt;
     const amt = this.walkAmt;
     const w = Math.sin(this.walkTime);
 
+    if (this.rig) {
+      // 리깅 모델: 뼈 애니메이션이 모든 동작을 담당
+      this.rig.pose(amt, this.walkTime, this.idleTime);
+      this.body.rotation.set(0, 0, 0);
+      this.body.position.y = 0;
+      this.body.scale.set(1, 1, 1);
+    } else {
     // 몸 전체: 작은 좌우 뒤뚱 + 걸음마다 콩
     this.body.rotation.z = w * 0.07 * amt;
     this.body.position.y = Math.abs(w) * 0.035 * amt;
@@ -649,6 +815,8 @@ class Character {
     // 가만히 있을 때 숨쉬기
     const breath = 1 + Math.sin(this.idleTime * 2.2) * 0.015 * (1 - amt);
     this.body.scale.set(1 / Math.sqrt(breath), breath, 1 / Math.sqrt(breath));
+
+    }
 
     if (this.uniforms) {
       this.uniforms.uPhase.value = this.walkTime;
