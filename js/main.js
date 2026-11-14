@@ -453,7 +453,7 @@ const CHARACTERS = {
     },
   },
   rae: {
-    label: 'Rae', file: 'models/rae.glb', length: 1.1, height: 0.6, fallbackColor: '#5a8de0',
+    label: 'Rae', file: 'models/rae.glb', length: 1.2, height: 0.6, fallbackColor: '#5a8de0',
     rig: {
       yaw: 0, speed: 0.95, hump: 0.26, bounce: 0.05, chest: 0.08,
       armSwing: 0.5, flap: 0.3, tailKick: 0.5, headBob: 0.18, breathe: 0.05, idleTilt: 0.12,

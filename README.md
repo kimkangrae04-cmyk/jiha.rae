@@ -29,10 +29,9 @@
 - ⚠️ 공개(public) 저장소라면 사진도 누구나 볼 수 있어요.
 
 ## 캐릭터 모델
-- `models/wajiha.glb` — Wajiha (Tripo로 제작)
-- `models/rae.glb` — Rae (Tripo로 제작)
-- 리깅이 없어도 괜찮아요. 뒤뚱 걸음·숨쉬기 동작은 코드로 만듭니다.
-- 텍스처는 2000년대 게임 느낌이 나도록 256px로 줄여서 씁니다.
+- `models/wajiha.glb`, `models/rae.glb` — Tripo에서 만든 엎드린 물범 + 동물형 리깅(애니메이션 없음)
+- 걷기(갤럼핑)·쉬기 동작은 `js/main.js`의 `SealRig`가 코드로 만듭니다. 뼈 이름 대신 위치로 머리·척추·앞지느러미·뒷지느러미를 구분해서, 모델을 바꿔도 그대로 동작해요.
+- 동작 크기·속도는 `CHARACTERS.wajiha.rig` / `CHARACTERS.rae.rig` 숫자로 조절합니다.
 
 ## 배포 (GitHub Pages)
 저장소 **Settings → Pages → Branch: `main` / `(root)` → Save**  
