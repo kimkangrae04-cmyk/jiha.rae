@@ -434,6 +434,8 @@ const heartTex = canvasTexture(128, 128, (g, w, h) => {
 });
 
 /* ---------- 캐릭터 모델 (models/*.glb) ---------- */
+// 모델 파일을 바꿀 때마다 올리기 (브라우저 캐시에 남은 옛 모델 방지)
+const MODEL_VERSION = 2;
 const CHARACTERS = {
   // 둘 다 Tripo 동물형 리깅 모델 (배를 바닥에 댄 물범). 숫자는 라디안 / 미터.
   wajiha: {
@@ -492,7 +494,7 @@ function retroTexture(tex) {
 
 async function preloadCharacters() {
   for (const [id, def] of Object.entries(CHARACTERS)) {
-    let model = await loadGLB(def.file);
+    let model = await loadGLB(`${def.file}?v=${MODEL_VERSION}`);
     let tint = null;
     if (!model && def.fallbackFile) { model = await loadGLB(def.fallbackFile); tint = def.tint; }
     if (!model) continue;
