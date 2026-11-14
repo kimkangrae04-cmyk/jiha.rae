@@ -439,7 +439,7 @@ const MODEL_VERSION = 2;
 const CHARACTERS = {
   // 둘 다 Tripo 동물형 리깅 모델 (배를 바닥에 댄 물범). 숫자는 라디안 / 미터.
   wajiha: {
-    label: 'Wajiha', file: 'models/wajiha.glb', length: 1.0, height: 0.6, fallbackColor: '#e05a7a',
+    label: 'Wajiha', file: 'models/wajiha.glb', kissFile: 'models/wajiha_kiss.glb', length: 1.0, height: 0.6, fallbackColor: '#e05a7a',
     rig: {
       yaw: 0,          // 모델이 +z(앞)를 보도록 돌리는 각도
       speed: 1.15,     // 걷기 박자 (가볍고 빠르게)
@@ -455,7 +455,7 @@ const CHARACTERS = {
     },
   },
   rae: {
-    label: 'Rae', file: 'models/rae.glb', length: 1.2, height: 0.6, fallbackColor: '#5a8de0',
+    label: 'Rae', file: 'models/rae.glb', kissFile: 'models/rae_kiss.glb', length: 1.2, height: 0.6, fallbackColor: '#5a8de0',
     rig: {
       yaw: 0, speed: 0.95, hump: 0.26, bounce: 0.05, chest: 0.08,
       armSwing: 0.5, flap: 0.3, tailKick: 0.5, headBob: 0.18, breathe: 0.05, idleTilt: 0.12,
@@ -492,6 +492,40 @@ function retroTexture(tex) {
   return t;
 }
 
+// 엎드린 물범 모델을 캐릭터 기준(앞 +z, 배 y=0, 몸길이 def.length)으로 맞추기
+function orientLying(model, def) {
+  model.rotation.y = def.rig?.yaw || 0;
+  model.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(model, true);
+  const s = def.length / (box.max.z - box.min.z);
+  model.scale.setScalar(s);
+  model.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(model, true);
+  model.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
+  return { s, height: box.max.y - box.min.y };
+}
+
+// 뽀뽀 얼굴 모델 (있으면 사용, 없으면 몸동작+하트만)
+async function preloadKissModels() {
+  for (const [id, def] of Object.entries(CHARACTERS)) {
+    if (!def.kissFile) continue;
+    const model = await loadGLB(`${def.kissFile}?v=${MODEL_VERSION}`);
+    if (!model) continue;
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      const m = o.material.clone();
+      if (m.map) m.map = retroTexture(m.map);
+      m.side = THREE.FrontSide;
+      o.material = m;
+      o.frustumCulled = false;
+    });
+    orientLying(model, { ...def, rig: { yaw: def.kissYaw ?? def.rig?.yaw ?? 0 } });
+    const wrap = new THREE.Group();
+    wrap.add(model);
+    modelCache[id + '_kiss'] = wrap;
+  }
+}
+
 async function preloadCharacters() {
   for (const [id, def] of Object.entries(CHARACTERS)) {
     let model = await loadGLB(`${def.file}?v=${MODEL_VERSION}`);
@@ -518,15 +552,9 @@ async function preloadCharacters() {
     let s;
     if (skinned) {
       // 엎드린 물범: 앞(머리)이 +z를 보게 돌리고, 몸길이를 def.length로 맞춘 뒤 배를 y=0에 붙이기
-      model.rotation.y = def.rig?.yaw || 0;
-      model.updateMatrixWorld(true);
-      let box = new THREE.Box3().setFromObject(model, true);
-      s = def.length / (box.max.z - box.min.z);
-      model.scale.setScalar(s);
-      model.updateMatrixWorld(true);
-      box = new THREE.Box3().setFromObject(model, true);
-      model.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
-      def.height = box.max.y - box.min.y;
+      const o = orientLying(model, def);
+      s = o.s;
+      def.height = o.height;
     } else {
       // 크기 맞추기: 발이 y=0, 키가 def.height가 되도록
       const box = new THREE.Box3().setFromObject(model);
@@ -646,7 +674,7 @@ class SealRig {
     b.bone.quaternion.multiply(this.q.setFromAxisAngle(b.axes[axis], angle));
   }
 
-  pose(amt, phase, idle) {
+  pose(amt, phase, idle, kiss = 0, kissT = 0) {
     const P = this.p;
     const s = Math.sin(phase);
     const c = Math.cos(phase);
@@ -672,6 +700,20 @@ class SealRig {
         // 뒷지느러미: 착지 때 들썩, 쉴 때 가끔 꼼지락
         const wig = Math.max(0, Math.sin(idle * 0.9) - 0.6) * Math.sin(idle * 9) * 0.6;
         this.rot(b, 'x', -Math.max(0, -s) * P.tailKick * amt - wig * still);
+        // 뽀뽀: 기분 좋아서 꼬리를 위로 들고 살랑살랑
+        this.rot(b, 'x', -0.5 * kiss);
+        this.rot(b, 'y', Math.sin(kissT * 14) * 0.25 * kiss);
+      }
+      if (kiss > 0) {
+        if (b.kind === 'mid' && b.along > 0.4 && b.desc <= 2) {
+          // 고개를 들고 눈 감은 채 살짝 갸웃
+          this.rot(b, 'x', -0.25 * kiss);
+          this.rot(b, 'z', Math.sin(kissT * 3) * 0.12 * kiss);
+        } else if (b.kind === 'front') {
+          // 앞지느러미를 모으며 수줍게 파닥
+          this.rot(b, 'y', -b.side * 0.35 * kiss);
+          this.rot(b, 'z', b.side * Math.sin(kissT * 18) * 0.15 * kiss);
+        }
       }
     }
   }
@@ -724,6 +766,8 @@ class Character {
         this.uniforms = null;
         this.rig = new SealRig(model, def.rig || {});
         this.height = def.height;
+        this.mainModel = model;
+        this.attachKissModel();
         return;
       }
       this.rig = null;
@@ -770,6 +814,67 @@ class Character {
     this.placeLabel();
   }
 
+  attachKissModel() {
+    this.kissModel = null;
+    const k = modelCache[this.charId + '_kiss'];
+    if (!k) return;
+    this.kissModel = k.clone();
+    this.kissModel.visible = false;
+    this.body.add(this.kissModel);
+  }
+
+  // 뽀뽀: lookAt(Vector3)이 있으면 그쪽을 바라보며 커플 뽀뽀, 없으면 혼자 하트 날리기
+  playKiss(lookAt) {
+    if (this.emote) return;
+    if (!this.kissModel && modelCache[this.charId + '_kiss']) this.attachKissModel();
+    this.emote = { t: 0, dur: 2.2, couple: !!lookAt, burst: false };
+    if (lookAt) {
+      const p = this.group.position;
+      this.faceYaw = Math.atan2(lookAt.x - p.x, lookAt.z - p.z);
+    } else {
+      this.faceYaw = null;
+    }
+  }
+
+  heartBurst(n, spread, y0) {
+    for (let i = 0; i < n; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: heartTex, transparent: true, depthTest: false }));
+      const sc = 0.25 + Math.random() * 0.35;
+      s.scale.set(sc, sc, 1);
+      s.position.set((Math.random() - 0.5) * spread, y0 + Math.random() * 0.3, (Math.random() - 0.2) * spread * 0.6 + 0.4);
+      s.userData.y0 = s.position.y;
+      s.renderOrder = 11;
+      this.group.add(s);
+      this.hearts.push({ s, life: Math.random() * 0.3 });
+    }
+  }
+
+  updateEmote(dt) {
+    const e = this.emote;
+    if (!e) return 0;
+    e.t += dt;
+    if (this.faceYaw != null) this.group.rotation.y = angleLerp(this.group.rotation.y, this.faceYaw, Math.min(1, dt * 10));
+    const showKiss = e.t > 0.15 && e.t < e.dur - 0.2;
+    if (this.kissModel) {
+      this.kissModel.visible = showKiss;
+      if (this.mainModel) this.mainModel.visible = !showKiss;
+    }
+    if (!e.burst && e.t > 0.55) {
+      e.burst = true;
+      if (e.couple) this.heartBurst(9, 1.0, this.height * 0.8);
+      else this.heartBurst(5, 0.6, this.height * 0.9);
+    }
+    if (e.t >= e.dur) {
+      if (this.kissModel) this.kissModel.visible = false;
+      if (this.mainModel) this.mainModel.visible = true;
+      this.emote = null;
+      this.faceYaw = null;
+      return 0;
+    }
+    // 0→1→0 부드러운 정도 (들어갈 때 / 나올 때)
+    return Math.min(1, e.t / 0.35, (e.dur - e.t) / 0.35);
+  }
+
   heart() {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: heartTex, transparent: true, depthTest: false }));
     s.scale.set(0.5, 0.5, 1);
@@ -792,7 +897,8 @@ class Character {
 
     if (this.rig) {
       // 리깅 모델: 뼈 애니메이션이 모든 동작을 담당
-      this.rig.pose(amt, this.walkTime, this.idleTime);
+      const ek = this.emote ? Math.min(1, this.emote.t / 0.35, (this.emote.dur - this.emote.t) / 0.35) : 0;
+      this.rig.pose(amt, this.walkTime, this.idleTime, Math.max(0, ek), this.emote ? this.emote.t : 0);
       const P = this.rig.p;
       const hop = Math.max(0, w);
       // 몸 전체: 통 튀어 오르며 가슴 들기, 착지 때 살짝 눌림, 좌우 출렁
@@ -810,6 +916,22 @@ class Character {
     const breath = 1 + Math.sin(this.idleTime * 2.2) * 0.015 * (1 - amt);
     this.body.scale.set(1 / Math.sqrt(breath), breath, 1 / Math.sqrt(breath));
 
+    }
+
+    // 감정표현: 상대 쪽으로 몸을 내밀고 가슴을 들며, 바뀔 때 통 튀는 효과
+    const k = this.updateEmote(dt);
+    if (k > 0) {
+      const pop = this.emote && this.emote.t < 0.35 ? Math.sin((this.emote.t / 0.35) * Math.PI) * 0.12 : 0;
+      // '쪽!' 하고 앞으로 콕 내밀기 (0.45~0.8초), 혼자일 땐 하트를 날리듯 위로
+      const t = this.emote ? this.emote.t : 0;
+      const peck = t > 0.45 && t < 0.8 ? Math.sin(((t - 0.45) / 0.35) * Math.PI) : 0;
+      this.body.position.z = (this.emote?.couple ? 0.12 : 0.05) * k + peck * 0.1;
+      this.body.rotation.z = Math.sin(t * 6) * 0.05 * k;
+      this.body.position.y += 0.04 * k;
+      this.body.rotation.x -= 0.12 * k;
+      this.body.scale.multiplyScalar(1 + pop);
+    } else {
+      this.body.position.z = 0;
     }
 
     if (this.uniforms) {
@@ -850,6 +972,7 @@ window.addEventListener('keydown', (e) => {
     else if (nearFrame >= 0) openViewer(nearFrame);
   }
   if (e.code === 'KeyH' && !e.repeat && !viewerOpen) sendHeart();
+  if (e.code === 'KeyK' && !e.repeat && !viewerOpen) sendKiss();
   if (e.code === 'Escape' && viewerOpen) closeViewer();
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
@@ -905,6 +1028,7 @@ joyEl.addEventListener('pointerup', joyEnd);
 joyEl.addEventListener('pointercancel', joyEnd);
 
 $('heart-btn').onclick = () => sendHeart();
+$('kiss-btn').onclick = () => sendKiss();
 $('view-btn').onclick = () => { if (nearFrame >= 0) openViewer(nearFrame); };
 
 const raycaster = new THREE.Raycaster();
@@ -1035,6 +1159,15 @@ function handleMessage(msg) {
     case 'heart':
       if (partner) partner.heart();
       break;
+    case 'kiss':
+      if (!partner) break;
+      if (msg.couple && me) {
+        partner.playKiss(me.group.position);
+        me.playKiss(partner.group.position);
+      } else {
+        partner.playKiss(null);
+      }
+      break;
     case 'view': {
       const f = frames[msg.idx];
       if (!f) break;
@@ -1042,6 +1175,19 @@ function handleMessage(msg) {
       break;
     }
   }
+}
+
+const KISS_DIST = 2.5;
+function sendKiss() {
+  if (!me || me.emote) return;
+  const couple = !!(partner && partner.group.position.distanceTo(me.group.position) < KISS_DIST);
+  if (couple) {
+    me.playKiss(partner.group.position);
+    partner.playKiss(me.group.position);
+  } else {
+    me.playKiss(null);
+  }
+  send({ t: 'kiss', couple });
 }
 
 function sendHeart() {
@@ -1146,7 +1292,7 @@ async function startGame() {
   if (started) return;
   started = true;
   await galleryReady;
-  await Promise.all([buildMuseum(), preloadCharacters()]);
+  await Promise.all([buildMuseum(), preloadCharacters().then(preloadKissModels)]);
 
   me = new Character(myName, myChar);
   me.group.position.set(isHost ? -1 : 1, 0, HALL_L / 2 - 3);
@@ -1206,6 +1352,7 @@ function loop() {
     if (keys.has('KeyD') || keys.has('ArrowRight')) ix += 1;
     if (joy.active) { ix += joy.x; iz += joy.y; }
   }
+  if (me.emote) { ix = 0; iz = 0; }
   const len = Math.hypot(ix, iz);
   me.moving = len > 0.1;
   if (me.moving) {
@@ -1228,7 +1375,7 @@ function loop() {
     const k = Math.min(1, dt * 10);
     p.x += (partnerTarget.x - p.x) * k;
     p.z += (partnerTarget.z - p.z) * k;
-    partner.group.rotation.y = angleLerp(partner.group.rotation.y, partnerTarget.ry, k);
+    if (!partner.emote) partner.group.rotation.y = angleLerp(partner.group.rotation.y, partnerTarget.ry, k);
     partner.moving = partnerTarget.moving;
     partner.update(dt);
   }
