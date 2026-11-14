@@ -435,29 +435,28 @@ const heartTex = canvasTexture(128, 128, (g, w, h) => {
 
 /* ---------- 캐릭터 모델 (models/*.glb) ---------- */
 const CHARACTERS = {
-  wajiha: { label: 'Wajiha', file: 'models/wajiha.glb', height: 1.2, tint: null, fallbackColor: '#e05a7a' },
-  // rae.glb가 아직 없으면 wajiha 모델을 조금 크고 푸르스름하게 바꿔서 임시로 씁니다.
-  rae: {
-    label: 'Rae', file: 'models/rae.glb', fallbackFile: 'models/wajiha.glb', height: 1.3, tint: 0xa9bccf, fallbackColor: '#5a8de0',
-    // 리깅된 모델용 동작 숫자 (라디안 / 모델 키=1 기준 길이)
+  // 둘 다 Tripo 동물형 리깅 모델 (배를 바닥에 댄 물범). 숫자는 라디안 / 미터.
+  wajiha: {
+    label: 'Wajiha', file: 'models/wajiha.glb', length: 1.0, height: 0.6, fallbackColor: '#e05a7a',
     rig: {
-      prone: 1.25,     // 앞으로 엎드리는 각도
-      spineUp: 0.25,   // 가슴 들기
-      neckUp: 0.45,    // 목 들기
-      headUp: 0.6,     // 고개 들어 앞 보기
-      armDown: 0.5,    // 앞지느러미 바닥 짚기
-      armOut: 0.35,    // 앞지느러미 옆으로 벌리기
-      // 뒷지느러미를 뒤로 나란히 뻗기 (Tripo 뼈대가 좌우 비대칭이라 따로 맞춤)
-      legLx: 1.4, legLy: -0.5, legRx: 1.35,
-      speed: 1.0,      // 걷기 속도 배율
-      hump: 0.32,      // 등이 물결치는 크기
-      bounce: 0.07,    // 통 튀어 오르는 높이
-      armSwing: 0.6,   // 앞지느러미 젓기
-      tailKick: 0.45,  // 뒷지느러미 들썩임
-      roll: 0.12,      // 좌우 출렁
-      headBob: 0.18,   // 고개 까딱
-      breathe: 0.03,   // 숨쉬기
-      idleTilt: 0.18,  // 쉴 때 고개 갸웃
+      yaw: 0,          // 모델이 +z(앞)를 보도록 돌리는 각도
+      speed: 1.15,     // 걷기 박자 (가볍고 빠르게)
+      hump: 0.22,      // 등 물결
+      bounce: 0.06,    // 통 튀는 높이
+      chest: 0.10,     // 튈 때 가슴 들기
+      armSwing: 0.55,  // 앞지느러미 젓기
+      flap: 0.35,      // 앞지느러미 퍼덕
+      tailKick: 0.55,  // 뒷지느러미 들썩
+      headBob: 0.15,   // 고개 까딱
+      breathe: 0.04,   // 숨쉬기
+      idleTilt: 0.15,  // 쉴 때 고개 갸웃
+    },
+  },
+  rae: {
+    label: 'Rae', file: 'models/rae.glb', length: 1.1, height: 0.6, fallbackColor: '#5a8de0',
+    rig: {
+      yaw: 0, speed: 0.95, hump: 0.26, bounce: 0.05, chest: 0.08,
+      armSwing: 0.5, flap: 0.3, tailKick: 0.5, headBob: 0.18, breathe: 0.05, idleTilt: 0.12,
     },
   },
 };
@@ -512,15 +511,29 @@ async function preloadCharacters() {
       o.geometry.computeBoundingBox();
       raw.union(o.geometry.boundingBox);
     });
-    // 크기 맞추기: 발이 y=0, 키가 def.height가 되도록
-    const box = new THREE.Box3().setFromObject(model);
-    const s = def.height / (box.max.y - box.min.y);
-    model.scale.setScalar(s);
-    model.position.y = -box.min.y * s;
-    const wrap = new THREE.Group();
-    wrap.add(model);
     let skinned = false;
     model.traverse((o) => { if (o.isSkinnedMesh) skinned = true; });
+    let s;
+    if (skinned) {
+      // 엎드린 물범: 앞(머리)이 +z를 보게 돌리고, 몸길이를 def.length로 맞춘 뒤 배를 y=0에 붙이기
+      model.rotation.y = def.rig?.yaw || 0;
+      model.updateMatrixWorld(true);
+      let box = new THREE.Box3().setFromObject(model, true);
+      s = def.length / (box.max.z - box.min.z);
+      model.scale.setScalar(s);
+      model.updateMatrixWorld(true);
+      box = new THREE.Box3().setFromObject(model, true);
+      model.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
+      def.height = box.max.y - box.min.y;
+    } else {
+      // 크기 맞추기: 발이 y=0, 키가 def.height가 되도록
+      const box = new THREE.Box3().setFromObject(model);
+      s = def.height / (box.max.y - box.min.y);
+      model.scale.setScalar(s);
+      model.position.y = -box.min.y * s;
+    }
+    const wrap = new THREE.Group();
+    wrap.add(model);
     wrap.userData.skinned = skinned;
     wrap.userData.scale = s;
     wrap.userData.raw = {
@@ -578,115 +591,86 @@ const WALK_VERTEX = `
 }
 `;
 
-/* ---------- 뼈 애니메이션 (Tripo 리깅 모델) ----------
-   Tripo의 사람형 뼈대를 물범처럼 씁니다.
-   - 척추(Waist·Spine01·Spine02): 애벌레처럼 물결
-   - 팔(Clavicle·Upperarm): 앞지느러미, 다리(Thigh): 뒷지느러미
-   각 뼈를 '모델 기준 축'(x=좌우축, y=위, z=앞)으로 돌려서 뼈마다 다른 로컬 축을 신경 쓰지 않게 했습니다. */
+/* ---------- 뼈 애니메이션 (Tripo 동물형 리깅) ----------
+   Tripo 뼈 이름은 모델마다 제각각이라, 이름 대신 '뼈의 위치'로 부위를 나눕니다.
+   (캐릭터 기준: +z 앞, +x 옆, +y 위)
+   - tail : 몸 뒤쪽 끝(뒷지느러미)
+   - front: 옆으로 멀리 나온 뼈(앞지느러미)
+   - mid  : 나머지(머리·목·척추) → 머리에서 꼬리로 흐르는 물결
+   각 뼈는 '캐릭터 기준 축'으로 돌려서, 뼈마다 다른 로컬 축을 신경 쓰지 않아도 됩니다. */
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
 
 class SealRig {
   constructor(root, params) {
     this.p = params;
     this.q = new THREE.Quaternion();
-    this.bones = {};
-    this.meshes = [];
+    this.bones = [];
     root.updateMatrixWorld(true);
-    const rootInv = root.getWorldQuaternion(new THREE.Quaternion()).invert();
-    root.traverse((o) => {
-      if (o.isSkinnedMesh) this.meshes.push(o);
-      if (!o.isBone) return;
-      const inv = o.getWorldQuaternion(new THREE.Quaternion()).premultiply(rootInv).invert();
-      this.bones[o.name] = {
-        bone: o,
-        rest: o.quaternion.clone(),
-        restPos: o.position.clone(),
-        axes: { x: AXES.x.clone().applyQuaternion(inv), y: AXES.y.clone().applyQuaternion(inv), z: AXES.z.clone().applyQuaternion(inv) },
-      };
-    });
-    this.root = this.bones.BoneRoot;
-    this.ground = new THREE.Vector3();
-    this.settle(root);
-  }
-
-  rot(name, axis, angle) {
-    const b = this.bones[name];
-    if (!b || !angle) return;
-    b.bone.quaternion.multiply(this.q.setFromAxisAngle(b.axes[axis], angle));
-  }
-
-  // 기본 자세를 잡고, 발(배)이 바닥에 닿고 몸 가운데가 원점에 오도록 위치 보정
-  settle(root) {
-    this.ground.set(0, 0, 0);
-    this.pose(0, 0, 0);
-    root.updateMatrixWorld(true);
+    const rootInvM = root.matrixWorld.clone().invert();
+    const rootInvQ = root.getWorldQuaternion(new THREE.Quaternion()).invert();
     const box = new THREE.Box3();
-    for (const m of this.meshes) { m.computeBoundingBox(); box.union(m.boundingBox); }
-    if (!box.isEmpty()) {
-      this.ground.set(0, -box.min.y, -(box.min.z + box.max.z) / 2);
-      this.restHeight = box.max.y - box.min.y;
-    }
-    this.pose(0, 0, 0);
+    root.traverse((o) => {
+      if (!o.isSkinnedMesh) return;
+      o.computeBoundingBox();
+      box.union(o.boundingBox.clone().applyMatrix4(o.matrixWorld).applyMatrix4(rootInvM));
+    });
+    const cz = (box.min.z + box.max.z) / 2;
+    const hl = Math.max(1e-3, (box.max.z - box.min.z) / 2);
+    const hw = Math.max(1e-3, (box.max.x - box.min.x) / 2);
+    let mids = 0;
+    root.traverse((o) => {
+      if (!o.isBone) return;
+      const pos = o.getWorldPosition(new THREE.Vector3()).applyMatrix4(rootInvM);
+      const inv = o.getWorldQuaternion(new THREE.Quaternion()).premultiply(rootInvQ).invert();
+      const along = (pos.z - cz) / hl;   // -1 꼬리 … +1 머리
+      const lat = pos.x / hw;            // -1 … +1
+      let kind = 'mid';
+      if (along < -0.5) kind = 'tail';
+      else if (Math.abs(lat) > 0.35) kind = 'front';
+      let desc = 0;
+      o.traverse((c) => { if (c !== o && c.isBone) desc++; });
+      if (kind === 'mid') mids++;
+      this.bones.push({
+        bone: o, rest: o.quaternion.clone(), along, side: lat >= 0 ? 1 : -1, kind, desc,
+        axes: { x: AXES.x.clone().applyQuaternion(inv), y: AXES.y.clone().applyQuaternion(inv), z: AXES.z.clone().applyQuaternion(inv) },
+      });
+    });
+    this.midScale = 2 / Math.max(2, mids);
+    this.summary = this.bones.map((b) => `${b.bone.name}:${b.kind}:${b.along.toFixed(2)}`);
+  }
+
+  rot(b, axis, angle) {
+    if (!angle) return;
+    b.bone.quaternion.multiply(this.q.setFromAxisAngle(b.axes[axis], angle));
   }
 
   pose(amt, phase, idle) {
     const P = this.p;
-    for (const k in this.bones) {
-      const b = this.bones[k];
-      b.bone.quaternion.copy(b.rest);
-      b.bone.position.copy(b.restPos);
-    }
     const s = Math.sin(phase);
     const c = Math.cos(phase);
+    const hop = Math.max(0, s);          // 가슴이 들리는 순간
     const still = 1 - amt;
-
-    // ---- 기본 자세: 배를 바닥에 대고 엎드려 고개 들기 ----
-    this.rot('Hip', 'x', P.prone);
-    this.rot('Spine01', 'x', -P.spineUp * 0.5);
-    this.rot('Spine02', 'x', -P.spineUp * 0.5);
-    this.rot('NeckTwist01', 'x', -P.neckUp);
-    this.rot('Head', 'x', -P.headUp);
-    for (const [side, sign] of [['L', 1], ['R', -1]]) {
-      this.rot(side + '_Clavicle', 'x', P.armDown * 0.4);
-      this.rot(side + '_Upperarm', 'x', P.armDown);
-      this.rot(side + '_Upperarm', 'z', sign * P.armOut);
-    }
-    this.rot('L_Thigh', 'x', P.legLx || 0);
-    this.rot('L_Thigh', 'y', P.legLy || 0);
-    this.rot('R_Thigh', 'x', P.legRx || 0);
-
-    // ---- 걷기: 갤럼핑 (가슴 튀어오름 → 등 물결 → 뒷지느러미 들썩) ----
-    const hop = Math.max(0, s);                 // 가슴이 들리는 순간
-    const wave = Math.sin(phase - 1.1);         // 등 물결 (가슴보다 늦게)
-    this.rot('Hip', 'x', -hop * P.hump * 0.5 * amt);
-    this.rot('Waist', 'x', -wave * P.hump * amt);
-    this.rot('Spine01', 'x', wave * P.hump * 0.6 * amt);
-    this.rot('Spine02', 'x', hop * P.hump * 0.5 * amt);
-    this.rot('NeckTwist01', 'x', -hop * P.headBob * amt);
-    this.rot('Head', 'x', hop * P.headBob * 0.6 * amt);
-    this.rot('Hip', 'y', s * P.roll * amt);
-    for (const [side, sign] of [['L', 1], ['R', -1]]) {
-      this.rot(side + '_Upperarm', 'x', -c * P.armSwing * amt);           // 둘이 같이 바닥 밀기
-      this.rot(side + '_Upperarm', 'z', sign * hop * P.armSwing * 0.3 * amt);
-      this.rot(side + '_Thigh', 'x', -Math.max(0, -s) * P.tailKick * amt); // 뒷지느러미 들썩
-      this.rot(side + '_Calf', 'x', -Math.max(0, -s) * P.tailKick * 0.6 * amt);
-    }
-
-    // ---- 쉬기: 숨쉬기, 고개 갸웃, 가끔 꼬리 꼼지락 ----
     const br = Math.sin(idle * 2.0);
-    this.rot('Spine02', 'x', br * P.breathe * still);
-    this.rot('NeckTwist01', 'x', -br * P.breathe * 0.5 * still);
-    this.rot('Head', 'z', Math.sin(idle * 0.7) * P.idleTilt * still);
-    this.rot('Head', 'x', Math.max(0, Math.sin(idle * 0.45)) * 0.12 * still);
-    const wig = Math.max(0, Math.sin(idle * 0.9) - 0.6) * 2.5;
-    for (const side of ['L', 'R']) {
-      this.rot(side + '_Thigh', 'x', -Math.sin(idle * 9) * wig * 0.25 * still);
-    }
-
-    // ---- 위치: 바닥 맞춤 + 튀어오르기 ----
-    if (this.root) {
-      this.root.bone.position.add(this.ground);
-      this.root.bone.position.y += (hop * P.bounce + Math.max(0, br) * 0.004 * still) * (amt > 0 ? 1 : 1);
+    for (const b of this.bones) {
+      b.bone.quaternion.copy(b.rest);
+      if (b.kind === 'mid') {
+        // 머리 → 꼬리로 흐르는 등 물결
+        const w = Math.sin(phase - (1 - b.along) * 1.8);
+        this.rot(b, 'x', w * P.hump * this.midScale * amt);
+        if (b.along > 0.4 && b.desc <= 2) {
+          // 머리·목 끝 뼈: 튈 때 고개 까딱, 쉴 때 숨쉬기·갸웃
+          this.rot(b, 'x', -hop * P.headBob * amt + br * P.breathe * still);
+          this.rot(b, 'z', Math.sin(idle * 0.7) * P.idleTilt * still);
+        }
+      } else if (b.kind === 'front') {
+        // 앞지느러미: 두 쪽이 같이 바닥을 밀고, 튈 때 바깥으로 퍼덕
+        this.rot(b, 'x', -c * P.armSwing * amt + Math.sin(idle * 1.3 + b.side) * 0.08 * still);
+        this.rot(b, 'z', b.side * hop * P.flap * amt);
+      } else {
+        // 뒷지느러미: 착지 때 들썩, 쉴 때 가끔 꼼지락
+        const wig = Math.max(0, Math.sin(idle * 0.9) - 0.6) * Math.sin(idle * 9) * 0.6;
+        this.rot(b, 'x', -Math.max(0, -s) * P.tailKick * amt - wig * still);
+      }
     }
   }
 }
@@ -737,7 +721,7 @@ class Character {
         this.body.add(model);
         this.uniforms = null;
         this.rig = new SealRig(model, def.rig || {});
-        this.height = this.rig.restHeight ? this.rig.restHeight * cached.userData.scale : def.height;
+        this.height = def.height;
         return;
       }
       this.rig = null;
@@ -807,9 +791,14 @@ class Character {
     if (this.rig) {
       // 리깅 모델: 뼈 애니메이션이 모든 동작을 담당
       this.rig.pose(amt, this.walkTime, this.idleTime);
-      this.body.rotation.set(0, 0, 0);
-      this.body.position.y = 0;
-      this.body.scale.set(1, 1, 1);
+      const P = this.rig.p;
+      const hop = Math.max(0, w);
+      // 몸 전체: 통 튀어 오르며 가슴 들기, 착지 때 살짝 눌림, 좌우 출렁
+      this.body.position.y = hop * (P.bounce || 0.05) * amt;
+      this.body.rotation.set(-hop * (P.chest || 0.08) * amt, 0, Math.cos(this.walkTime) * 0.04 * amt);
+      const squash = 1 - Math.max(0, -w) * 0.06 * amt;
+      const breath = 1 + Math.sin(this.idleTime * 2.0) * 0.02 * (1 - amt);
+      this.body.scale.set(1 / Math.sqrt(squash * breath), squash * breath, 1);
     } else {
     // 몸 전체: 작은 좌우 뒤뚱 + 걸음마다 콩
     this.body.rotation.z = w * 0.07 * amt;
